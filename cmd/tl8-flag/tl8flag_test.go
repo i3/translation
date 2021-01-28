@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"translation/internal/tl8"
 
 	"github.com/google/go-cmp/cmp"
 )
@@ -18,30 +19,30 @@ which spans multiple lines.
 
 ## first heading {#first translated="4_18"}
 `)
-	doc, err := segment(source)
+	doc, err := tl8.Segment(source)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	headingDocument := heading{
+	headingDocument := tl8.Heading{
 		Line:       1,
 		ID:         "document",
 		Translated: "",
 	}
-	headingFirst := heading{
+	headingFirst := tl8.Heading{
 		Line:       6,
 		ID:         "first",
 		Translated: "4_18",
 	}
-	wantHeadings := []heading{
+	wantHeadings := []tl8.Heading{
 		headingDocument,
 		headingFirst,
 	}
-	if diff := cmp.Diff(wantHeadings, doc.headings); diff != "" {
+	if diff := cmp.Diff(wantHeadings, doc.Headings); diff != "" {
 		t.Errorf("unexpected headings: diff (-want +got):\n%s", diff)
 	}
 
-	wantSections := []section{
+	wantSections := []tl8.Section{
 		{
 			Heading: headingDocument,
 			Lines: []string{
@@ -56,7 +57,7 @@ which spans multiple lines.
 			Lines:   []string{},
 		},
 	}
-	if diff := cmp.Diff(wantSections, doc.sections); diff != "" {
+	if diff := cmp.Diff(wantSections, doc.Sections); diff != "" {
 		t.Errorf("unexpected sections: diff (-want +got):\n%s", diff)
 	}
 }
