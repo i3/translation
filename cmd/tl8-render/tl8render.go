@@ -3,61 +3,21 @@ package main
 import (
 	"flag"
 	"fmt"
+	"html/template"
 	"io/ioutil"
 	"log"
 	"os"
 	"path/filepath"
 	"strings"
+	"translation/internal/tl8"
 
 	"github.com/google/renameio"
-	"github.com/yuin/goldmark"
 	"github.com/yuin/goldmark/ast"
-	"github.com/yuin/goldmark/extension"
 	"github.com/yuin/goldmark/parser"
 	"github.com/yuin/goldmark/renderer"
-	"github.com/yuin/goldmark/renderer/html"
 	"github.com/yuin/goldmark/text"
 	"github.com/yuin/goldmark/util"
 )
-
-const preamble = `<!DOCTYPE html>
-<html lang="en">
-<head>
-<link rel="icon" type="image/x-icon" href="/favicon.ico">
-<meta http-equiv="Content-Type" content="application/xhtml+xml; charset=UTF-8" />
-<meta name="generator" content="AsciiDoc 9.0.3" />
-<title>i3: i3 User’s Guide</title>
-<link rel="stylesheet" href="https://i3wm.org/css/style.css" type="text/css" />
-<link rel="stylesheet" href="markdownxhtml11.css" type="text/css" />
-<script type="text/javascript">
-/*<![CDATA[*/
-document.addEventListener("DOMContentLoaded", function(){asciidoc.footnotes(); asciidoc.toc(2);}, false);
-/*]]>*/
-</script>
-<script type="text/javascript" src="/js/asciidoc-xhtml11.js"></script>
-</head>
-<body>
-    <header>
-        <a class="logo" href="/">
-            <img src="https://i3wm.org/img/logo.svg" alt="i3 WM logo" />
-        </a>
-        <nav>
-            <ul>
-                <li><a style="border-bottom: 2px solid #fff" href="/docs">Docs</a></li>
-                <li><a href="/screenshots">Screens</a></li>
-                <li><a href="https://www.reddit.com/r/i3wm/">FAQ</a></li>
-                <li><a href="/contact">Contact</a></li>
-                <li><a href="https://github.com/i3/i3/issues">Bugs</a></li>
-            </ul>
-        </nav>
-    </header>
-    <main>
-`
-
-const footer = `</main>
-</body>
-</html>
-`
 
 type translationStatusNode struct {
 	ast.BaseBlock
@@ -80,7 +40,7 @@ var kindTranslationStatus = ast.NewNodeKind("TranslationStatus")
 type versionNode struct {
 	ast.BaseBlock
 
-	since string
+	introduced string
 }
 
 // Kind implements Node.Kind
@@ -106,8 +66,8 @@ func modifyASTFromHeading(heading ast.Node) {
 			continue
 		}
 		val := string(b)
-		if string(attr.Name) == "class" && strings.HasPrefix(val, "since_") {
-			vsn.since = strings.TrimPrefix(val, "since_")
+		if string(attr.Name) == "introduced" {
+			vsn.introduced = val
 		}
 		if string(attr.Name) == "translated" {
 			tsn.translatedVersion = val
@@ -115,7 +75,7 @@ func modifyASTFromHeading(heading ast.Node) {
 		//log.Printf("heading attr, name=%s, value=%s", attr.Name, val)
 	}
 
-	if vsn.since != "" {
+	if vsn.introduced != "" {
 		// Adding a child will make it part of the heading HTML element
 		// (e.g. <h1>)
 		heading.AppendChild(heading, vsn)
@@ -146,7 +106,9 @@ func numericVersionToHuman(v string) string {
 	return strings.ReplaceAll(v, "_", ".")
 }
 
-type tl8renderer struct{}
+type tl8renderer struct {
+	basename string
+}
 
 func (r *tl8renderer) RegisterFuncs(reg renderer.NodeRendererFuncRegisterer) {
 	reg.Register(kindTranslationStatus, r.renderTranslationStatus)
@@ -158,7 +120,7 @@ func (r *tl8renderer) renderVersion(w util.BufWriter, source []byte, node ast.No
 		return ast.WalkContinue, nil
 	}
 	vsn := node.(*versionNode)
-	fmt.Fprintf(w, `<span class="sinceversion">since i3 v%s</span>`, numericVersionToHuman(vsn.since))
+	fmt.Fprintf(w, `<span class="introduced">since i3 v%s</span>`, numericVersionToHuman(vsn.introduced))
 	return ast.WalkContinue, nil
 }
 
@@ -177,51 +139,59 @@ func (r *tl8renderer) renderTranslationStatus(w util.BufWriter, source []byte, n
 Out-of-date! This section’s translation was last updated for i3 v%s
 (<a href="https://github.com/i3/i3/commits/next/docs/%s">what changed?</a>) 
 (<a href="https://github.com/i3/i3/edit/next/docs/%s">contribute</a>)
-</i>`,
+</i>
+`,
 		translatedVersion,
-		"userguide", /* TODO */
-		"userguide" /* TODO */)
+		r.basename,
+		r.basename)
 	return ast.WalkContinue, nil
 }
 
-func render1(fn string) error {
-	outfn := strings.TrimSuffix(fn, filepath.Ext(fn)) + ".html"
+func render1(fn string, headerTmpl, footerTmpl *template.Template) error {
+	basename := strings.TrimSuffix(fn, filepath.Ext(fn))
+	outfn := basename + ".html"
 	source, err := ioutil.ReadFile(fn)
 	if err != nil {
 		return err
 	}
 
-	md := goldmark.New(
-		// GFM is GitHub Flavored Markdown, which we need for tables, for
-		// example.
-		goldmark.WithExtensions(extension.GFM),
-		goldmark.WithParserOptions(
-			parser.WithAutoHeadingID(),
-			// The Attribute option allows us to id, classes, and arbitrary
-			// options on headings (for translation status).
-			parser.WithAttribute(),
-			parser.WithASTTransformers(util.Prioritized(&tl8transformer{}, 1)),
-		),
-		goldmark.WithRendererOptions(
-			html.WithHardWraps(),
-			html.WithXHTML(),
-			renderer.WithNodeRenderers(
-				util.Prioritized(&tl8renderer{}, 500)),
-		),
-	)
+	md := tl8.NewGoldmarkWithOptions(
+		[]parser.Option{parser.WithASTTransformers(util.Prioritized(&tl8transformer{}, 1))},
+		[]renderer.Option{renderer.WithNodeRenderers(util.Prioritized(&tl8renderer{
+			basename: basename,
+		}, 500))})
 
 	out, err := renameio.TempFile("", outfn)
 	if err != nil {
 		return err
 	}
 
-	out.Write([]byte(preamble))
+	if headerTmpl != nil {
+		doc, err := tl8.Segment(source)
+		if err != nil {
+			return err
+		}
+
+		documentHeading := doc.Headings[0]
+
+		if err := headerTmpl.Execute(out, struct {
+			Title string
+		}{
+			Title: documentHeading.Text,
+		}); err != nil {
+			return fmt.Errorf("rendering -header_template: %v", err)
+		}
+	}
 
 	if err := md.Convert(source, out); err != nil {
 		return err
 	}
 
-	out.Write([]byte(footer))
+	if footerTmpl != nil {
+		if err := footerTmpl.Execute(out, nil); err != nil {
+			return fmt.Errorf("rendering -footer_template: %v", err)
+		}
+	}
 
 	if err := out.CloseAtomicallyReplace(); err != nil {
 		return err
@@ -230,13 +200,40 @@ func render1(fn string) error {
 }
 
 func tl8render() error {
+	var (
+		header = flag.String("header_template",
+			"",
+			"path to a Go template file (https://golang.org/pkg/html/template/) containing the HTML that should be printed before converted markdown content")
+
+		footer = flag.String("footer_template",
+			"",
+			"path to a Go template file (https://golang.org/pkg/html/template/) containing the HTML that should be printed after converted markdown content")
+	)
+
 	flag.Parse()
 	if flag.NArg() < 1 {
 		return fmt.Errorf("syntax: %s <markdown-file> [<markdown-file>...]", filepath.Base(os.Args[0]))
 	}
 
+	var headerTmpl, footerTmpl *template.Template
+	if *header != "" {
+		var err error
+		headerTmpl, err = template.ParseFiles(*header)
+		if err != nil {
+			return err
+		}
+	}
+
+	if *footer != "" {
+		var err error
+		footerTmpl, err = template.ParseFiles(*footer)
+		if err != nil {
+			return err
+		}
+	}
+
 	for _, fn := range flag.Args() {
-		if err := render1(fn); err != nil {
+		if err := render1(fn, headerTmpl, footerTmpl); err != nil {
 			return err
 		}
 	}

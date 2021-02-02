@@ -10,25 +10,30 @@ import (
 	"github.com/yuin/goldmark/ast"
 	"github.com/yuin/goldmark/extension"
 	"github.com/yuin/goldmark/parser"
+	"github.com/yuin/goldmark/renderer"
 	"github.com/yuin/goldmark/renderer/html"
 	"github.com/yuin/goldmark/text"
 )
 
 func NewGoldmark() goldmark.Markdown {
+	return NewGoldmarkWithOptions(nil, nil)
+}
+
+func NewGoldmarkWithOptions(parserOptions []parser.Option, rendererOptions []renderer.Option) goldmark.Markdown {
 	return goldmark.New(
 		// GFM is GitHub Flavored Markdown, which we need for tables, for
 		// example.
 		goldmark.WithExtensions(extension.GFM),
-		goldmark.WithParserOptions(
+		goldmark.WithParserOptions(append([]parser.Option{
 			parser.WithAutoHeadingID(),
 			// The Attribute option allows us to id, classes, and arbitrary
 			// options on headings (for translation status).
 			parser.WithAttribute(),
-		),
-		goldmark.WithRendererOptions(
+		}, parserOptions...)...),
+		goldmark.WithRendererOptions(append([]renderer.Option{
 			html.WithHardWraps(),
 			html.WithXHTML(),
-		),
+		}, rendererOptions...)...),
 	)
 }
 
@@ -36,6 +41,7 @@ type Heading struct {
 	Line       int
 	ID         string
 	Translated string
+	Text       string
 }
 
 type Section struct {
@@ -107,6 +113,7 @@ func Segment(source []byte) (*Document, error) {
 				return ast.WalkStop, fmt.Errorf("BUG: could not find line offset for position %d", first.Start)
 			}
 			h.Line = line + 1
+			h.Text = string(n.Text(source))
 			headings = append(headings, h)
 			headingsByID[h.ID] = h
 		}
